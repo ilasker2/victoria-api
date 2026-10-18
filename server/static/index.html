@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Victoria</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: Georgia, "Iowan Old Style", serif; margin: 0; background: #f4f1ea; color: #1c1915; }
+    header, main { max-width: 760px; margin: 0 auto; padding: 24px; }
+    header { padding-bottom: 0; }
+    h1 { font-size: 2rem; margin: 0 0 8px; }
+    p { line-height: 1.45; }
+    .status { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.9rem; color: #5c564c; }
+    form.setup, form.composer { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button, textarea { font: inherit; }
+    button { padding: 8px 12px; background: #1c1915; color: #f4f1ea; border: 0; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #log { display: flex; flex-direction: column; gap: 12px; margin: 24px 0; }
+    article { background: white; padding: 14px 16px; border-radius: 8px; white-space: pre-wrap; }
+    article.user { background: #e7efe6; }
+    .meta { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.75rem; letter-spacing: 0.02em; text-transform: uppercase; color: #5c564c; margin-bottom: 6px; }
+    textarea { flex: 1; min-width: 240px; min-height: 64px; padding: 8px; }
+    #error { color: #8a1f1f; font-family: ui-sans-serif, system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Victoria</h1>
+    <p>A local coaching session for Tidewell Systems. This page is the backend API console. The product UI is the sibling <code>victoria-web</code> repo (Lovable / Vite) — keep coaching logic here.</p>
+    <p class="status" id="status">Loading…</p>
+  </header>
+  <main>
+    <form class="setup" id="setup">
+      <button type="submit">Start session</button>
+    </form>
+    <div id="log"></div>
+    <p id="error"></p>
+    <form class="composer" id="composer" hidden>
+      <textarea id="text" placeholder="Reply to Victoria (a number works for the menu)"></textarea>
+      <button type="submit">Send</button>
+      <button type="button" id="feedback" hidden>Ask for feedback</button>
+    </form>
+  </main>
+  <script>
+    const statusEl = document.querySelector("#status");
+    const log = document.querySelector("#log");
+    const errorEl = document.querySelector("#error");
+    const feedbackBtn = document.querySelector("#feedback");
+    let sessionId = null;
+
+    function add(role, reply) {
+      const article = document.createElement("article");
+      article.className = role;
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      if (role === "assistant") {
+        const held = reply.calculations_withheld ? " · calculation held" : "";
+        const task = reply.task ? ` · ${reply.task}` : "";
+        meta.textContent = `${reply.provider}${reply.model ? " · " + reply.model : ""} · ${reply.mode}${task} · ${reply.topic || "orientation"}${held}`;
+        feedbackBtn.hidden = reply.mode !== "investor";
+      } else {
+        meta.textContent = "You";
+      }
+      const body = document.createElement("div");
+      body.textContent = role === "assistant" ? reply.message : reply;
+      article.append(meta, body);
+      log.append(article);
+      article.scrollIntoView({ block: "nearest" });
+    }
+
+    async function read(response) {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || response.statusText);
+      return data;
+    }
+
+    document.querySelector("#setup").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorEl.textContent = "";
+      log.textContent = "";
+      try {
+        const reply = await read(await fetch("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }));
+        sessionId = reply.session_id;
+        document.querySelector("#composer").hidden = false;
+        document.querySelector("#setup").hidden = true;
+        add("assistant", reply);
+      } catch (error) {
+        errorEl.textContent = error.message;
+      }
+    });
+
+    document.querySelector("#composer").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = document.querySelector("#text").value.trim();
+      if (!text || !sessionId) return;
+      document.querySelector("#text").value = "";
+      add("user", text);
+      try {
+        const reply = await read(await fetch(`/api/sessions/${sessionId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        }));
+        add("assistant", reply);
+      } catch (error) {
+        errorEl.textContent = error.message;
+      }
+    });
+
+    feedbackBtn.addEventListener("click", () => {
+      document.querySelector("#text").value = "Please give me feedback";
+      document.querySelector("#composer").requestSubmit();
+    });
+
+    fetch("/api/meta").then(read).then((meta) => {
+      statusEl.textContent = meta.provider === "claude"
+        ? `Claude is connected (${meta.model}). Sessions are kept in memory only.`
+        : "No Claude key found. Victoria is using the local coach. Add ANTHROPIC_API_KEY to .env to switch.";
+    }).catch((error) => {
+      statusEl.textContent = error.message;
+    });
+  </script>
+</body>
+</html>
